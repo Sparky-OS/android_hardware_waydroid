@@ -58,7 +58,6 @@
 #include "modes/multi-window.h"
 #include "modes/single-window.h"
 
-using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
 
 using ::vendor::waydroid::display::V1_3::IWaydroidDisplay;
@@ -683,7 +682,6 @@ static void* hwc_binder_thread(void* data) {
     sp<IWaydroidClipboard> waydroidClipboard;
 
     setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
-    configureRpcThreadpool(1, true /*callerWillJoin*/);
 
     waydroidDisplay = new WaydroidDisplay(pdev->display);
     if (waydroidDisplay == nullptr) {

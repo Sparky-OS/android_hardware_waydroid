@@ -43,6 +43,7 @@
 #include <getopt.h>
 #include <errno.h>
 #include <map>
+#include <mutex>
 #include <list>
 #include <set>
 #include <pthread.h>
@@ -147,11 +148,16 @@ enum class BufferTransform : int32_t {
 
 BufferTransform hwc_transform_to_buffer_transform(uint32_t hwc_transform);
 
+struct stereo_surface;
+struct kde_stereo_content_manager_v1;
+
 struct surface_context {
     struct wl_surface *surface;
     struct wp_viewport *viewport;
 
-    surface_context() = default;
+    std::unique_ptr<stereo_surface> stereo;
+    void clear_stereo();
+    surface_context();
     surface_context(wl_surface *surface, wp_viewport *viewport);
     ~surface_context();
 
@@ -375,6 +381,12 @@ struct display {
     std::map<uint32_t, std::vector<uint64_t>> modifiers;
     std::map<uint32_t, std::string> layer_names;
     std::map<uint32_t, struct handleExt> layer_handles_ext;
+    kde_stereo_content_manager_v1* stereo_manager = nullptr;
+    bool stereo_missing_reported = false;
+    wl_event_queue* stereo_queue = nullptr;
+    std::mutex stereo_mutex;
+    std::map<uint64_t, int32_t> stereo_layouts;
+    std::vector<uint64_t> stereo_layer_ids;
     struct handleExt target_layer_handle_ext;
     std::unordered_map<buffer_handle_t, std::unique_ptr<buffer>> buffer_map;
     std::array<uint8_t, 239> keysDown;

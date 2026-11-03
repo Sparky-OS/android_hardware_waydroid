@@ -19,7 +19,7 @@
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_2 {
+namespace V1_3 {
 namespace implementation {
 
 WaydroidDisplay::WaydroidDisplay(struct display *display)
@@ -71,8 +71,17 @@ Return<Error> WaydroidDisplay::setMouseMetadata(uint32_t layer, int32_t style, f
     return Error::NONE;
 }
 
+Return<Error> WaydroidDisplay::setStereoLayout(uint64_t layer, int32_t layout) {
+    std::lock_guard<std::mutex> lock(mDisplay->stereo_mutex);
+    if (layout == 0)
+        mDisplay->stereo_layouts.erase(layer);
+    else
+        mDisplay->stereo_layouts[layer] = layout;
+    return Error::NONE;
+}
+
 }  // namespace implementation
-}  // namespace V1_2
+}  // namespace V1_3
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor

@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "surface.h"
+#include "../hwcomposer.h"
+#include "kde-stereo-content-v1-client-protocol.h"
+#include <log/log.h>
+#include <ui/GraphicBufferMapper.h>
+#include <ui/Rect.h>
+#include <sys/syscall.h>
+#include <linux/memfd.h>
+#include <limits.h>
+#include <cstring>
+
+using waydroid::stereo::Layout;
+using waydroid::stereo::Size;
+
+stereo_surface::~stereo_surface() { clear(); }
+void stereo_surface::clear() {
+    if (declaration) {
+        kde_stereo_content_v1_set_content(declaration, KDE_STEREO_CONTENT_V1_CONTENT_NONE);
+        kde_stereo_content_v1_destroy(declaration);
+        declaration = nullptr;
+    }
+}
+void surface_context::clear_stereo() { if (stereo) stereo->clear(); }
+
+int32_t stereo_layout_for(display* d, size_t index) {
+    std::lock_guard<std::mutex> lock(d->stereo_mutex);
+    if (index >= d->stereo_layer_ids.size()) return 0;
+    auto it = d->stereo_layouts.find(d->stereo_layer_ids[index]);
+    return it == d->stereo_layouts.end() ? 0 : it->second;
+}
+
+static stereo_buffer* acquire_buffer(display* d, stereo_surface& state, Size size) {
+    for (auto& slot : state.buffers) {
+        if (!slot->busy && slot->image->metadata.width == size.width &&
+            slot->image->metadata.height == size.height) return slot.get();
+    }
+    // Bound storage even if the compositor stops releasing frames.
+    auto slot = std::make_unique<stereo_buffer>();
+    size_t position = 0;
+    while (position < state.buffers.size() && state.buffers[position]->busy) ++position;
+    if (position == state.buffers.size() && position == 3) return nullptr;
+    const size_t length = size_t(size.width) * size.height * 4;
+    if (!d->shm || length > INT_MAX) return nullptr;
+    int fd = syscall(SYS_memfd_create, "waydroid-stereo", MFD_CLOEXEC);
+    if (fd < 0) return nullptr;
+    if (ftruncate(fd, length)) { close(fd); return nullptr; }
+    void* mapping = mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapping == MAP_FAILED) { close(fd); return nullptr; }
+    auto* pool = wl_shm_create_pool(d->shm, fd, length);
+    close(fd);
+    if (!pool) { munmap(mapping, length); return nullptr; }
+    auto* wlbuf = wl_shm_pool_create_buffer(pool, 0, size.width, size.height,
+                                           size.width * 4, WL_SHM_FORMAT_ARGB8888);
+    wl_shm_pool_destroy(pool);
+    if (!wlbuf) { munmap(mapping, length); return nullptr; }
+    slot->image.reset(new buffer{});
+    auto& image = *slot->image;
+    image.wl_buffer = wlbuf;
+    image.metadata = {size.height, size.width, size.width, HAL_PIXEL_FORMAT_BGRA_8888};
+    image.isShm = true;
+    image.shm_data = mapping;
+    image.size = length;
+    static const wl_buffer_listener listener = {
+        [](void* data, wl_buffer*) { static_cast<stereo_buffer*>(data)->busy = false; }
+    };
+    wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(wlbuf), d->stereo_queue);
+    wl_buffer_add_listener(wlbuf, &listener, slot.get());
+    if (position == state.buffers.size()) state.buffers.push_back(std::move(slot));
+    else state.buffers[position] = std::move(slot);
+    return state.buffers[position].get();
+}
+
+bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
+                    size_t index, surface_context& surface, buffer*& buf, hwc_frect_t& crop) {
+    auto* d = pdev->display;
+    const auto layout = static_cast<Layout>(stereo_layout_for(d, index));
+    if (layout == Layout::Unset || layout == Layout::Mono) {
+        surface.clear_stereo();
+        return false;
+    }
+    if (!surface.stereo) surface.stereo = std::make_unique<stereo_surface>();
+    auto& state = *surface.stereo;
+    const auto fail = [&](const char* reason) {
+        state.clear();
+        if (state.last_error != reason) {
+            ALOGE("WaydroidStereo: layer index %zu layout %d shown in 2D: %s",
+                  index, static_cast<int32_t>(layout), reason);
+            state.last_error = reason;
+        }
+        return false;
+    };
+    if (!d->stereo_manager) {
+        state.clear();
+        if (!d->stereo_missing_reported) {
+            ALOGE("WaydroidStereo: compositor has no kde_stereo_content_manager_v1; stereo requests shown in 2D");
+            d->stereo_missing_reported = true;
+        }
+        return false;
+    }
+    if (!surface.viewport) return fail("viewporter is required for per-eye geometry");
+    const auto& m = buf->metadata;
+    Size out{};
+    if (const char* reason = waydroid::stereo::output_size(layout, {m.width, m.height}, &out))
+        return fail(reason);
+    if (layer->transform || crop.left != 0 || crop.top != 0 ||
+        crop.right != m.width || crop.bottom != m.height)
+        return fail("cropped or transformed packed input requires per-eye crop/transform");
+    if (layout != Layout::SideBySideLeft && layout != Layout::SideBySideQuincunxLeft) {
+        if (m.format != HAL_PIXEL_FORMAT_RGBA_8888 && m.format != HAL_PIXEL_FORMAT_RGBX_8888 &&
+            m.format != HAL_PIXEL_FORMAT_BGRA_8888)
+            return fail("CPU repack needs readable RGBA, RGBX or BGRA8888; precision is never reduced");
+        if (m.pixel_stride < m.width) return fail("invalid source stride");
+        auto* slot = acquire_buffer(d, state, out);
+        if (!slot) return fail("no released copy buffer or SHM allocation failed");
+        void* source = nullptr;
+        int32_t bytes_per_pixel = 0, bytes_per_stride = 0;
+        auto& mapper = android::GraphicBufferMapper::get();
+        if (mapper.lock(layer->handle, GRALLOC_USAGE_SW_READ_OFTEN,
+                        android::Rect(m.width, m.height), &source,
+                        &bytes_per_pixel, &bytes_per_stride))
+            return fail("source buffer cannot be CPU-read (protected or unmappable)");
+        // Older grallocs report -1 for these fields; use only native handle
+        // metadata in that case, never the legacy Z-indexed generic fallback.
+        if (bytes_per_pixel < 0 || bytes_per_stride < 0) {
+            if (d->gtype != GrallocType::GRALLOC_GBM && d->gtype != GrallocType::GRALLOC_CROS) {
+                mapper.unlock(layer->handle);
+                return fail("gralloc cannot verify CPU pixel stride");
+            }
+            bytes_per_pixel = 4;
+            bytes_per_stride = m.pixel_stride <= INT_MAX / 4 ? m.pixel_stride * 4 : 0;
+        }
+        if (bytes_per_pixel != 4 || bytes_per_stride < int64_t(m.width) * 4) {
+            mapper.unlock(layer->handle);
+            return fail("gralloc mapping has unexpected pixel or row stride");
+        }
+        auto* pixels = static_cast<uint8_t*>(slot->image->shm_data);
+        bool ok = waydroid::stereo::repack(layout, {m.width, m.height},
+                static_cast<uint8_t*>(source), size_t(bytes_per_stride) * m.height,
+                size_t(bytes_per_stride), 4, pixels, slot->image->size);
+        mapper.unlock(layer->handle);
+        if (!ok) return fail("source bounds or packing rejected");
+        // Wayland's mandatory ARGB8888 is BGRA byte order on Android x86.
+        for (size_t i = 0; i < size_t(out.width) * out.height; ++i) {
+            if (m.format != HAL_PIXEL_FORMAT_BGRA_8888) std::swap(pixels[i*4], pixels[i*4+2]);
+            if (m.format == HAL_PIXEL_FORMAT_RGBX_8888) pixels[i*4+3] = 255;
+        }
+        buf = slot->image.get();
+        slot->busy = true;
+        crop = {0, 0, float(out.width), float(out.height)};
+    }
+    if (!state.declaration)
+        state.declaration = kde_stereo_content_manager_v1_create(d->stereo_manager, surface.surface);
+    kde_stereo_content_v1_set_content(state.declaration, KDE_STEREO_CONTENT_V1_CONTENT_SIDE_BY_SIDE_FULL);
+    state.last_error.clear();
+    return true;
+}

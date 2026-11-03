@@ -33,6 +33,7 @@ cc_library_shared {
         "vendor.waydroid.display@1.0",
         "vendor.waydroid.display@1.1",
         "vendor.waydroid.display@1.2",
+        "vendor.waydroid.display@1.3",
         "vendor.waydroid.task@1.0",
         "vendor.waydroid.window@1.0",
         "vendor.waydroid.window@1.1",
@@ -47,6 +48,8 @@ cc_library_shared {
     srcs: [
         "extension.cpp",
         "gralloc_handler.cpp",
+        "stereo/layout.cpp",
+        "stereo/surface.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp",
         "WaydroidClipboard.cpp",
@@ -72,8 +75,8 @@ cc_library_shared {
         "-Wall",
         "-Werror",
     ],
-    generated_sources: ["wayland_android_client_protocol_sources"],
-    generated_headers: ["wayland_android_client_protocol_headers"],
+    generated_sources: ["wayland_android_client_protocol_sources", "waydroid_stereo_protocol_source"],
+    generated_headers: ["wayland_android_client_protocol_headers", "waydroid_stereo_protocol_header"],
 }
 
 // Generate wayland-android protocol source file
@@ -91,4 +94,30 @@ genrule {
     tools: ["wayland_scanner"],
     cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
     out: ["wayland-android-client-protocol.h"],
+}
+
+cc_library_headers {
+    name: "waydroid_stereo_identity_headers",
+    vendor: true,
+    export_include_dirs: ["stereo"],
+}
+
+genrule {
+    name: "waydroid_stereo_protocol_source",
+    srcs: ["stereo/kde-stereo-content-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) private-code < $(in) > $(out)",
+    out: ["kde-stereo-content-v1-protocol.c"],
+}
+genrule {
+    name: "waydroid_stereo_protocol_header",
+    srcs: ["stereo/kde-stereo-content-v1.xml"],
+    tools: ["wayland_scanner"],
+    cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
+    out: ["kde-stereo-content-v1-client-protocol.h"],
+}
+cc_test_host {
+    name: "waydroid_stereo_layout_test",
+    srcs: ["stereo/layout.cpp", "stereo/layout_test.cpp"],
+    cflags: ["-Wall", "-Werror"],
 }

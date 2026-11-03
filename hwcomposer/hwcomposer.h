@@ -31,6 +31,7 @@
 #include <map>
 
 #include "wayland-hwc.h"
+#include "stereo/identity.h"
 #include "gralloc_handler.h"
 
 struct waydroid_mode;
@@ -59,7 +60,7 @@ class wl_cursor_cursor_handler : public cursor_handler {
     int on_cursor_enter(display *display) override;
 };
 
-struct waydroid_hwc_composer_device_1 : hwc_composer_device_1_t {
+struct waydroid_hwc_composer_device_1 : waydroid_stereo_device_v1 {
     const hwc_procs_t *procs;        // constant after init
     pthread_t vsync_thread;          // constant after init
     pthread_t binder_thread;         // constant after init

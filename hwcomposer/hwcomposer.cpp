@@ -51,6 +51,7 @@
 #include "gralloc_handler.h"
 #include "egl-tools.h"
 #include "extension.h"
+#include "stereo/surface.h"
 
 #include "modes/closed.h"
 #include "modes/full-ui.h"
@@ -60,8 +61,8 @@
 using ::android::hardware::configureRpcThreadpool;
 using ::android::hardware::joinRpcThreadpool;
 
-using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
-using ::vendor::waydroid::display::V1_2::implementation::WaydroidDisplay;
+using ::vendor::waydroid::display::V1_3::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_3::implementation::WaydroidDisplay;
 using ::vendor::waydroid::window::V1_1::IWaydroidWindow;
 using ::vendor::waydroid::window::implementation::WaydroidWindow;
 using ::vendor::waydroid::clipboard::V1_0::IWaydroidClipboard;
@@ -338,67 +339,56 @@ static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surfac
     });
 }
 
-static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr) {
-    constexpr int acquireWarningMS = 100;
-    int res = -1;
-
-    if (!buf) {
-        buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
-        if (!buf) {
-            ALOGE("Failed to get wayland buffer");
-            goto out;
+static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr, buffer **presented = nullptr) {
+    // Never read an Android buffer, including the SHM import path, before its fence.
+    if (hwc_layer->acquireFenceFd != -1) {
+        int result = sync_wait(hwc_layer->acquireFenceFd, 1000);
+        close(hwc_layer->acquireFenceFd);
+        hwc_layer->acquireFenceFd = -1;
+        if (result < 0) {
+            ALOGE("WaydroidStereo: acquire fence failed; layer %zu withdrawn", hwc_layer_index);
+            surface_context.clear_stereo();
+            wl_surface_attach(surface_context.surface, nullptr, 0, 0);
+            wl_surface_commit(surface_context.surface);
+            return -1;
         }
     }
-
-    // TODO: Implement per-hwc_layer explicit synchronization
+    if (!buf) buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
+    if (!buf) {
+        surface_context.clear_stereo();
+        wl_surface_attach(surface_context.surface, nullptr, 0, 0);
+        wl_surface_commit(surface_context.surface);
+        return -1;
+    }
     hwc_layer->releaseFenceFd = -1;
+    auto crop = rect_apply_transform(hwc_layer->sourceCropf, hwc_layer->transform);
+    const bool can_declare = pdev->should_compose &&
+            hwc_layer->compositionType != HWC_FRAMEBUFFER_TARGET &&
+            !(hwc_layer->flags & HWC_IS_CURSOR_LAYER);
+    if (can_declare) prepare_stereo(pdev, hwc_layer, hwc_layer_index, surface_context, buf, crop);
+    else surface_context.clear_stereo();
 
     surface_context.attach_buffer(*buf);
-    apply_surface_damage(hwc_layer, surface_context);
+    // A repack changes damage coordinates; full damage is safe for both paths.
+    if (surface_context.stereo) surface_context.damage_surface(0, 0, INT32_MAX, INT32_MAX);
+    else apply_surface_damage(hwc_layer, surface_context);
     surface_context.set_buffer_transform(hwc_transform_to_buffer_transform(hwc_layer->transform));
-    // Scaling can only be supported correctly with wp_viewport
     if (surface_context.viewport) {
-        surface_context.set_crop(rect_apply_transform(hwc_layer->sourceCropf, hwc_layer->transform));
+        surface_context.set_crop(crop);
         surface_context.set_display_frame(hwc_layer->displayFrame, pdev->display->scale);
     } else {
         surface_context.set_buffer_scale(pdev->display->scale);
     }
-
-    // TODO: Implement explicit synchronization
-    if (hwc_layer->acquireFenceFd != -1) {
-        res = sync_wait(hwc_layer->acquireFenceFd, acquireWarningMS);
-        if (res < 0 && errno == ETIME) {
-            ALOGE("hwcomposer waited on fence %d for %d ms", hwc_layer->acquireFenceFd,
-                  acquireWarningMS);
-        }
-    } else {
-        res = 0;
-    }
-
     wl_surface_commit(surface_context.surface);
-
-out:
-    if (hwc_layer->acquireFenceFd != -1) {
-        close(hwc_layer->acquireFenceFd);
-    }
-    return res;
+    if (presented) *presented = buf;
+    return 0;
 }
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window) {
-    buffer *buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
-    if (!buf) {
-        ALOGE("Failed to get wayland buffer");
-        if (hwc_layer->acquireFenceFd != -1) {
-            close(hwc_layer->acquireFenceFd);
-        }
-        return -1;
-    }
-
+    buffer *buf = nullptr;
     auto &window_layer = window->get_next_layer();
-
-    if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index, window_layer, buf) != 0) {
-        return -1;
-    }
+    if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index,
+                                           window_layer, nullptr, &buf) != 0) return -1;
 
     window_layer.set_position(
         floor(hwc_layer->displayFrame.left / pdev->display->scale),
@@ -452,8 +442,17 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     auto& mode = pdev->selected_mode;
     mode->setup_set(pdev, contents);
+    if (!pdev->should_compose) {
+        static bool reported = false;
+        std::lock_guard<std::mutex> lock(pdev->display->stereo_mutex);
+        if (!reported && !pdev->display->stereo_layouts.empty()) {
+            ALOGE("WaydroidStereo: mode has no per-layer subsurfaces; stereo requests shown in 2D");
+            reported = true;
+        }
+    }
 
     std::scoped_lock lock(pdev->display->windowsMutex);
+    wl_display_dispatch_queue_pending(pdev->display->display, pdev->display->stereo_queue);
     mode->cleanup_stale_windows(pdev, contents);
 
     reset_per_commit_state_window(pdev);
@@ -523,6 +522,9 @@ static int hwc_set_power_move(struct hwc_composer_device_1 *dev __unused, int di
 
 static int hwc_query(struct hwc_composer_device_1 *, int what, int *value) {
     switch (what) {
+        case WAYDROID_STEREO_IDENTITY_QUERY:
+            *value = WAYDROID_STEREO_IDENTITY_V1;
+            break;
         case HWC_BACKGROUND_LAYER_SUPPORTED:
             // TODO: Support background layer
             *value = 0;
@@ -725,6 +727,17 @@ static int hwc_open(const struct hw_module_t* module, const char* name,
     pdev->eventControl = hwc_event_control;
     pdev->setPowerMode = hwc_set_power_move;
     pdev->query = hwc_query;
+    pdev->set_layer_ids = [](hwc_composer_device_1_t* dev, size_t count, const uint64_t* ids) {
+        auto* d = static_cast<waydroid_hwc_composer_device_1*>(dev)->display;
+        std::lock_guard<std::mutex> lock(d->stereo_mutex);
+        d->stereo_layer_ids.clear();
+        if (count) d->stereo_layer_ids.assign(ids, ids + count);
+        std::unordered_set<uint64_t> live(d->stereo_layer_ids.begin(), d->stereo_layer_ids.end());
+        for (auto it = d->stereo_layouts.begin(); it != d->stereo_layouts.end();) {
+            if (!live.count(it->first)) it = d->stereo_layouts.erase(it);
+            else ++it;
+        }
+    };
     pdev->registerProcs = hwc_register_procs;
     pdev->dump = nullptr;
     pdev->getDisplayConfigs = hwc_get_display_configs;
@@ -842,6 +855,7 @@ void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc
 
         assert(window_it->second->layers.size() == 2);
         auto &last_layer = window_it->second->layers[window_it->second->layers.size() - 1];
+        last_layer.clear_stereo();
         wl_surface_attach(last_layer.surface, nullptr, 0, 0);
         wl_surface_commit(last_layer.surface);
     }

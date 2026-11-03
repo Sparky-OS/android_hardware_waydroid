@@ -69,6 +69,8 @@
 #include "gralloc_handler.h"
 
 #include <wayland-client.h>
+#include "stereo/surface.h"
+#include "kde-stereo-content-v1-client-protocol.h"
 #include <wayland-android-client-protocol.h>
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "viewporter-client-protocol.h"
@@ -629,23 +631,28 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     return window;
 }
 
+surface_context::surface_context() : surface(nullptr), viewport(nullptr) {}
 surface_context::surface_context(wl_surface *surface, wp_viewport *viewport) : surface(surface), viewport(viewport) {}
 surface_context::~surface_context() {
+    stereo.reset();
     if (viewport)
         wp_viewport_destroy(viewport);
     if (surface)
         wl_surface_destroy(surface);
 }
-surface_context::surface_context(surface_context&& other) : surface(other.surface), viewport(other.viewport) {
+surface_context::surface_context(surface_context&& other) : surface(other.surface), viewport(other.viewport), stereo(std::move(other.stereo)) {
     other.surface = nullptr;
     other.viewport = nullptr;
 }
 surface_context& surface_context::operator=(surface_context&& rhs) {
+    if (this == &rhs) return *this;
+    stereo.reset();
     if (viewport)
         wp_viewport_destroy(viewport);
     if (surface)
         wl_surface_destroy(surface);
 
+    stereo = std::move(rhs.stereo);
     surface = rhs.surface;
     viewport = rhs.viewport;
 
@@ -1882,6 +1889,10 @@ registry_handle_global(void *data, struct wl_registry *registry,
         d->compositor =
             (struct wl_compositor*)wl_registry_bind(registry,
                 id, &wl_compositor_interface, std::min(version, 5U));
+    } else if (strcmp(interface, "kde_stereo_content_manager_v1") == 0) {
+        d->stereo_manager = static_cast<kde_stereo_content_manager_v1*>(
+            wl_registry_bind(registry, id, &kde_stereo_content_manager_v1_interface,
+                             std::min(version, 2U)));
     } else if (strcmp(interface, "wl_subcompositor") == 0) {
         d->subcompositor =
         (struct wl_subcompositor*)wl_registry_bind(registry,
@@ -2097,6 +2108,7 @@ create_display(const char *gralloc)
         ALOGE("Couldn't open Wayland display.");
         return NULL;
     }
+    display->stereo_queue = wl_display_create_queue(display->display);
     sem_init(&display->egl_go, 0, 0);
     sem_init(&display->egl_done, 0, 0);
 
@@ -2126,6 +2138,14 @@ destroy_display(struct display *display)
 {
     pthread_kill(display->wayland_thread, SIGTERM);
     pthread_join(display->wayland_thread, nullptr);
+
+    // Declaration and copied-buffer owners must die before the connection.
+    display->windows.clear();
+    display->cursor_handler.reset();
+    if (display->stereo_manager)
+        kde_stereo_content_manager_v1_destroy(display->stereo_manager);
+    if (display->stereo_queue)
+        wl_event_queue_destroy(display->stereo_queue);
 
     if (display->wm_base)
         xdg_wm_base_destroy(display->wm_base);

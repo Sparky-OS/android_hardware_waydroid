@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
-#define VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
+#ifndef VENDOR_WAYDROID_DISPLAY_V1_3_WAYDROIDDISPLAY_H
+#define VENDOR_WAYDROID_DISPLAY_V1_3_WAYDROIDDISPLAY_H
 
 #include <android/hardware/graphics/composer/2.1/IComposer.h>
-#include <vendor/waydroid/display/1.2/IWaydroidDisplay.h>
+#include <vendor/waydroid/display/1.3/IWaydroidDisplay.h>
 #include <hidl/HidlTransportSupport.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
@@ -27,14 +27,14 @@
 namespace vendor {
 namespace waydroid {
 namespace display {
-namespace V1_2 {
+namespace V1_3 {
 namespace implementation {
 
 using ::android::hardware::hidl_string;
 using ::android::hardware::Return;
 using ::android::hardware::graphics::composer::V2_1::Error;
 using ::android::sp;
-using ::vendor::waydroid::display::V1_2::IWaydroidDisplay;
+using ::vendor::waydroid::display::V1_3::IWaydroidDisplay;
 
 class WaydroidDisplay : public IWaydroidDisplay {
   public:
@@ -51,14 +51,15 @@ class WaydroidDisplay : public IWaydroidDisplay {
 
     // Methods from ::vendor::waydroid::display::V1_2::IWaydroidDisplay follow.
     Return<Error> setMouseMetadata(uint32_t layer, int32_t style, float hotspotX, float hotspotY) override;
+    Return<Error> setStereoLayout(uint64_t layer, int32_t layout) override;
   private:
     struct display *mDisplay;
 };
 
 }  // namespace implementation
-}  // namespace V1_2
+}  // namespace V1_3
 }  // namespace display
 }  // namespace waydroid
 }  // namespace vendor
 
-#endif  // VENDOR_WAYDROID_DISPLAY_V1_2_WAYDROIDDISPLAY_H
+#endif  // VENDOR_WAYDROID_DISPLAY_V1_3_WAYDROIDDISPLAY_H

@@ -10,6 +10,9 @@
 #include <limits.h>
 #include <cstring>
 #include <cinttypes>
+#include <chrono>
+#include <poll.h>
+#include <cerrno>
 
 using waydroid::stereo::Layout;
 using waydroid::stereo::Size;
@@ -31,7 +34,43 @@ int32_t stereo_layout_for(display* d, size_t index) {
     return it == d->stereo_layouts.end() ? 0 : it->second;
 }
 
+static bool wait_for_buffer(display* d, stereo_surface& state) {
+    const auto available = [&]() {
+        for (const auto& slot : state.buffers) if (!slot->busy) return true;
+        return state.buffers.size() < 3;
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (!available()) {
+        if (wl_display_dispatch_queue_pending(d->display, d->stereo_queue) < 0) return false;
+        if (available()) return true;
+        // Read only the release queue here. The normal Wayland thread may be
+        // waiting for windowsMutex, which the composition pass already holds.
+        if (wl_display_prepare_read_queue(d->display, d->stereo_queue) < 0) continue;
+        if (wl_display_flush(d->display) < 0 && errno != EAGAIN) {
+            wl_display_cancel_read(d->display);
+            return false;
+        }
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+        if (left <= 0) {
+            wl_display_cancel_read(d->display);
+            return false;
+        }
+        pollfd fd{wl_display_get_fd(d->display), POLLIN, 0};
+        const int ready = poll(&fd, 1, static_cast<int>(left));
+        if (ready > 0 && (fd.revents & POLLIN)) {
+            if (wl_display_read_events(d->display) < 0) return false;
+        } else {
+            wl_display_cancel_read(d->display);
+            if (ready < 0 && errno == EINTR) continue;
+            return false;
+        }
+    }
+    return true;
+}
+
 static stereo_buffer* acquire_buffer(display* d, stereo_surface& state, Size size) {
+    if (!wait_for_buffer(d, state)) return nullptr;
     for (auto& slot : state.buffers) {
         if (!slot->busy && slot->image->metadata.width == size.width &&
             slot->image->metadata.height == size.height) return slot.get();
@@ -117,7 +156,7 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
             return fail("CPU repack needs readable RGBA, RGBX or BGRA8888; precision is never reduced");
         if (m.pixel_stride < m.width) return fail("invalid source stride");
         auto* slot = acquire_buffer(d, state, out);
-        if (!slot) return fail("no released copy buffer or SHM allocation failed");
+        if (!slot) return fail("copy buffer release timed out after 250 ms or SHM allocation failed");
         void* source = nullptr;
         size_t source_size = 0, source_stride = 0;
         auto& mapper = android::GraphicBufferMapper::get();

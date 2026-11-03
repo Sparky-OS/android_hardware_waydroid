@@ -23,6 +23,12 @@ enum class Layout : int32_t {
 struct Size { uint32_t width, height; };
 // Output dimensions include both eyes. No interpolation or upconversion.
 const char* output_size(Layout layout, Size input, Size* output);
+// Native per-eye source rectangle, before flips and clockwise rotation.
+struct EyeCrop { uint32_t left, top, width, height; };
+const char* cropped_size(Layout layout, Size input, EyeCrop crop, uint32_t transform, Size* output);
+bool repack_crop(Layout layout, Size input, EyeCrop crop, uint32_t transform,
+                 const uint8_t* source, size_t source_size, size_t stride,
+                 size_t sample_bytes, uint8_t* output, size_t output_bytes);
 // Byte copies preserve each source sample. Input stride and allocation length
 // are explicit so padding and truncated mappings cannot be read as pixels.
 bool repack(Layout layout, Size input, const uint8_t* source, size_t source_size,

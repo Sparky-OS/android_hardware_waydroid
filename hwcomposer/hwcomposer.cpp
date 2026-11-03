@@ -380,14 +380,16 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     const bool can_declare = stereo_child &&
             hwc_layer->compositionType != HWC_FRAMEBUFFER_TARGET &&
             !(hwc_layer->flags & HWC_IS_CURSOR_LAYER);
-    if (can_declare) prepare_stereo(pdev, hwc_layer, hwc_layer_index, surface_context, buf, crop);
-    else surface_context.clear_stereo();
+    const bool stereo_prepared = can_declare &&
+            prepare_stereo(pdev, hwc_layer, hwc_layer_index, surface_context, buf, crop);
+    if (!can_declare) surface_context.clear_stereo();
 
     surface_context.attach_buffer(*buf);
     // A repack changes damage coordinates; full damage is safe for both paths.
     if (surface_context.stereo) surface_context.damage_surface(0, 0, INT32_MAX, INT32_MAX);
     else apply_surface_damage(hwc_layer, surface_context);
-    surface_context.set_buffer_transform(hwc_transform_to_buffer_transform(hwc_layer->transform));
+    surface_context.set_buffer_transform(stereo_prepared ? WL_OUTPUT_TRANSFORM_NORMAL :
+                                         hwc_transform_to_buffer_transform(hwc_layer->transform));
     if (surface_context.viewport) {
         surface_context.set_crop(crop);
         surface_context.set_display_frame(hwc_layer->displayFrame, pdev->display->scale);

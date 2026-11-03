@@ -80,3 +80,52 @@ TEST(StereoLayout, SwappedEyeNegativeControlIsDetectable) {
     EXPECT_EQ(out[0], 101); EXPECT_EQ(out[2], 1);
 }
 }
+
+TEST(StereoGeometry, EachEyeRotatesAndFlipsIndependently) {
+    const uint8_t input[] = {1,2,3,101,102,103,4,5,6,104,105,106};
+    // HWC flips precede its clockwise quarter-turn. These references are
+    // hand-written 3x2/2x3 images, with the right eye offset by 100.
+    const std::vector<std::vector<uint8_t>> left = {
+        {1,2,3,4,5,6}, {3,2,1,6,5,4}, {4,5,6,1,2,3}, {6,5,4,3,2,1},
+        {4,1,5,2,6,3}, {6,3,5,2,4,1}, {1,4,2,5,3,6}, {3,6,2,5,1,4}};
+    for (uint32_t transform = 0; transform < 8; ++transform) {
+        SCOPED_TRACE(transform);
+        Size out{};
+        ASSERT_EQ(cropped_size(Layout::SideBySideLeft, {6,2}, {0,0,3,2}, transform, &out), nullptr);
+        const uint32_t width = transform & 4 ? 2 : 3;
+        EXPECT_EQ(out.width, width * 2);
+        uint8_t pixels[12]{};
+        ASSERT_TRUE(repack_crop(Layout::SideBySideLeft, {6,2}, {0,0,3,2}, transform,
+                                input, sizeof(input), 6, 1, pixels, sizeof(pixels)));
+        for (unsigned i=0; i<6; ++i) {
+            EXPECT_EQ(pixels[(i/width)*out.width+i%width], left[transform][i]);
+            EXPECT_EQ(pixels[(i/width)*out.width+i%width+width], left[transform][i]+100);
+        }
+    }
+}
+
+TEST(StereoGeometry, CropPreservesPackingPhaseAndEyeIdentity) {
+    const uint8_t columns[] = {1,101,2,102,3,103,4,104,5,105,6,106};
+    const uint8_t checker[] = {1,101,2,102,3,103,104,4,105,5,106,6};
+    const uint8_t rows[] = {1,2,3,101,102,103,4,5,6,104,105,106};
+    const uint8_t tb[] = {1,2,3,4,5,6,101,102,103,104,105,106};
+    const uint8_t expected[] = {5,6,105,106};
+    struct Case { Layout layout; Size size; const uint8_t* pixels; };
+    for (const auto& item : {Case{Layout::ColumnsLeft,{6,2},columns},
+            Case{Layout::CheckerboardLeft,{6,2},checker},
+            Case{Layout::RowsLeft,{3,4},rows}, Case{Layout::TopBottomLeft,{3,4},tb}}) {
+        uint8_t out[4]{};
+        ASSERT_TRUE(repack_crop(item.layout, item.size, {1,1,2,1}, 0, item.pixels,
+                                12, item.size.width, 1, out, sizeof(out)));
+        EXPECT_TRUE(std::equal(std::begin(expected), std::end(expected), out));
+    }
+}
+
+TEST(StereoGeometry, Clip399KeepsOneHundredNativeColumns) {
+    Size out{};
+    ASSERT_EQ(cropped_size(Layout::TopBottomLeft, {192,216}, {0,0,100,108}, 0, &out), nullptr);
+    EXPECT_EQ(out.width, 200u); EXPECT_EQ(out.height, 108u);
+    EXPECT_NE(cropped_size(Layout::TopBottomLeft, {192,216}, {0,0,193,108}, 0, &out), nullptr);
+    EXPECT_NE(cropped_size(Layout::TopBottomLeft, {192,216}, {0,0,100,108}, 8, &out), nullptr);
+    EXPECT_NE(cropped_size(Layout::TopBottomLeft, {192,216}, {0,0,0,108}, 0, &out), nullptr);
+}

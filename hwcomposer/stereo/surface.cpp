@@ -13,6 +13,7 @@
 #include <chrono>
 #include <poll.h>
 #include <cerrno>
+#include <cmath>
 
 using waydroid::stereo::Layout;
 using waydroid::stereo::Size;
@@ -147,10 +148,28 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
     Size out{};
     if (const char* reason = waydroid::stereo::output_size(layout, {m.width, m.height}, &out))
         return fail(reason);
-    if (layer->transform || crop.left != 0 || crop.top != 0 ||
-        crop.right != m.width || crop.bottom != m.height)
-        return fail("cropped or transformed packed input requires per-eye crop/transform");
-    if (layout != Layout::SideBySideLeft && layout != Layout::SideBySideQuincunxLeft) {
+    // SurfaceFlinger crops the packed rectangle. Apply the same normalized
+    // rectangle to each decoded eye, retaining the native sample lattice.
+    const auto& source_crop = layer->sourceCropf;
+    const double left = double(source_crop.left) * (out.width / 2) / m.width;
+    const double top = double(source_crop.top) * out.height / m.height;
+    const double right = double(source_crop.right) * (out.width / 2) / m.width;
+    const double bottom = double(source_crop.bottom) * out.height / m.height;
+    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
+        !std::isfinite(bottom) || left < 0 || top < 0 || right > out.width / 2 ||
+        bottom > out.height || right <= left || bottom <= top)
+        return fail("per-eye crop outside native samples");
+    if (left != std::floor(left) || top != std::floor(top) ||
+        right != std::floor(right) || bottom != std::floor(bottom))
+        return fail("fractional per-eye edges need compositor source-rectangle support; samples are not rescaled");
+    const waydroid::stereo::EyeCrop eye_crop{uint32_t(left), uint32_t(top),
+                                           uint32_t(right-left), uint32_t(bottom-top)};
+    const bool full_crop = left == 0 && top == 0 && right == out.width / 2 && bottom == out.height;
+    if (const char* reason = waydroid::stereo::cropped_size(layout, {m.width, m.height},
+                                                         eye_crop, layer->transform, &out))
+        return fail(reason);
+    if (layer->transform || !full_crop ||
+        (layout != Layout::SideBySideLeft && layout != Layout::SideBySideQuincunxLeft)) {
         if (m.format != HAL_PIXEL_FORMAT_RGBA_8888 && m.format != HAL_PIXEL_FORMAT_RGBX_8888 &&
             m.format != HAL_PIXEL_FORMAT_BGRA_8888)
             return fail("CPU repack needs readable RGBA, RGBX or BGRA8888; precision is never reduced");
@@ -189,7 +208,7 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
             source_size = source_stride * m.height;
         }
         auto* pixels = static_cast<uint8_t*>(slot->image->shm_data);
-        bool ok = waydroid::stereo::repack(layout, {m.width, m.height},
+        bool ok = waydroid::stereo::repack_crop(layout, {m.width, m.height}, eye_crop, layer->transform,
                 static_cast<uint8_t*>(source), source_size, source_stride,
                 4, pixels, slot->image->size);
         if (!imported_shm) mapper.unlock(layer->handle);

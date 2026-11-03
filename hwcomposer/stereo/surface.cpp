@@ -9,6 +9,7 @@
 #include <linux/memfd.h>
 #include <limits.h>
 #include <cstring>
+#include <cinttypes>
 
 using waydroid::stereo::Layout;
 using waydroid::stereo::Size;
@@ -40,8 +41,9 @@ static stereo_buffer* acquire_buffer(display* d, stereo_surface& state, Size siz
     size_t position = 0;
     while (position < state.buffers.size() && state.buffers[position]->busy) ++position;
     if (position == state.buffers.size() && position == 3) return nullptr;
+    if (!d->shm || size.width > INT_MAX / 4 ||
+        size.height > size_t(INT_MAX) / (size_t(size.width) * 4)) return nullptr;
     const size_t length = size_t(size.width) * size.height * 4;
-    if (!d->shm || length > INT_MAX) return nullptr;
     int fd = syscall(SYS_memfd_create, "waydroid-stereo", MFD_CLOEXEC);
     if (fd < 0) return nullptr;
     if (ftruncate(fd, length)) { close(fd); return nullptr; }
@@ -149,8 +151,18 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
         slot->busy = true;
         crop = {0, 0, float(out.width), float(out.height)};
     }
-    if (!state.declaration)
+    if (!state.declaration) {
         state.declaration = kde_stereo_content_manager_v1_create(d->stereo_manager, surface.surface);
+        if (!state.declaration) return fail("declaration allocation failed");
+        uint64_t identity = 0;
+        {
+            std::lock_guard<std::mutex> lock(d->stereo_mutex);
+            if (index < d->stereo_layer_ids.size()) identity = d->stereo_layer_ids[index];
+        }
+        ALOGI("WaydroidStereo: layer=%" PRIu64 " surface=%u layout=%d declared SBS left-first",
+              identity, wl_proxy_get_id(reinterpret_cast<wl_proxy*>(surface.surface)),
+              static_cast<int32_t>(layout));
+    }
     kde_stereo_content_v1_set_content(state.declaration, KDE_STEREO_CONTENT_V1_CONTENT_SIDE_BY_SIDE_FULL);
     state.last_error.clear();
     return true;

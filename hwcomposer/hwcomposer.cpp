@@ -340,24 +340,40 @@ static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surfac
 }
 
 static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr, buffer **presented = nullptr) {
-    // Never read an Android buffer, including the SHM import path, before its fence.
-    if (hwc_layer->acquireFenceFd != -1) {
-        int result = sync_wait(hwc_layer->acquireFenceFd, 1000);
-        close(hwc_layer->acquireFenceFd);
-        hwc_layer->acquireFenceFd = -1;
-        if (result < 0) {
-            ALOGE("WaydroidStereo: acquire fence failed; layer %zu withdrawn", hwc_layer_index);
-            surface_context.clear_stereo();
-            wl_surface_attach(surface_context.surface, nullptr, 0, 0);
-            wl_surface_commit(surface_context.surface);
-            return -1;
+    const int32_t requested_layout = stereo_layout_for(pdev->display, hwc_layer_index);
+    const bool stereo_requested = requested_layout != 0 && requested_layout != 1;
+    int result = 0;
+    const auto wait_acquire = [&]() {
+        if (hwc_layer->acquireFenceFd != -1) {
+            result = sync_wait(hwc_layer->acquireFenceFd, 100);
+            if (result < 0 && errno == ETIME)
+                ALOGE("hwcomposer waited on fence %d for 100 ms", hwc_layer->acquireFenceFd);
+            close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
         }
-    }
-    if (!buf) buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
-    if (!buf) {
+        return result;
+    };
+    // A stereo CPU read needs a completed acquire fence. Keep the existing
+    // mono wait/commit behavior, including its 100 ms warning threshold.
+    if (stereo_requested && wait_acquire() < 0) {
+        ALOGE("WaydroidStereo: acquire fence failed; layer %zu withdrawn", hwc_layer_index);
         surface_context.clear_stereo();
         wl_surface_attach(surface_context.surface, nullptr, 0, 0);
         wl_surface_commit(surface_context.surface);
+        return result;
+    }
+    if (!buf) buf = get_wl_buffer(pdev, hwc_layer, hwc_layer_index);
+    if (!buf) {
+        if (hwc_layer->acquireFenceFd != -1) {
+            close(hwc_layer->acquireFenceFd);
+            hwc_layer->acquireFenceFd = -1;
+        }
+        if (stereo_requested || surface_context.stereo) {
+            ALOGE("WaydroidStereo: buffer unavailable; layer %zu withdrawn", hwc_layer_index);
+            surface_context.clear_stereo();
+            wl_surface_attach(surface_context.surface, nullptr, 0, 0);
+            wl_surface_commit(surface_context.surface);
+        }
         return -1;
     }
     hwc_layer->releaseFenceFd = -1;
@@ -379,9 +395,10 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     } else {
         surface_context.set_buffer_scale(pdev->display->scale);
     }
+    if (!stereo_requested) wait_acquire();
     wl_surface_commit(surface_context.surface);
     if (presented) *presented = buf;
-    return 0;
+    return result;
 }
 
 int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, window *window) {
@@ -442,14 +459,24 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
 
     auto& mode = pdev->selected_mode;
     mode->setup_set(pdev, contents);
-    if (!pdev->should_compose) {
-        static bool reported = false;
+    bool unavailable_stereo = false;
+    for (size_t i = 0; i < contents->numHwLayers; ++i) {
+        const auto& layer = contents->hwLayers[i];
+        const int32_t layout = stereo_layout_for(pdev->display, i);
+        if (layout != 0 && layout != 1 && (!pdev->should_compose ||
+            layer.compositionType != HWC_OVERLAY || (layer.flags & HWC_IS_CURSOR_LAYER)))
+            unavailable_stereo = true;
+    }
+    {
         std::lock_guard<std::mutex> lock(pdev->display->stereo_mutex);
-        if (!reported && !pdev->display->stereo_layouts.empty()) {
-            ALOGE("WaydroidStereo: mode has no per-layer subsurfaces; stereo requests shown in 2D");
-            reported = true;
+        if (pdev->display->stereo_layer_ids.empty()) {
+            for (const auto& [id, layout] : pdev->display->stereo_layouts)
+                if (layout != 0 && layout != 1) unavailable_stereo = true;
         }
     }
+    if (unavailable_stereo && !pdev->display->stereo_composition_reported)
+        ALOGE("WaydroidStereo: stereo request has no identified per-layer subsurface in this composition pass; shown in 2D");
+    pdev->display->stereo_composition_reported = unavailable_stereo;
 
     std::scoped_lock lock(pdev->display->windowsMutex);
     wl_display_dispatch_queue_pending(pdev->display->display, pdev->display->stereo_queue);

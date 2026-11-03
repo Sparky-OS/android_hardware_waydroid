@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "layout.h"
 #include <cstring>
+#include <climits>
 #include <limits>
 
 namespace waydroid::stereo {
 const char* output_size(Layout layout, Size in, Size* out) {
-    if (!in.width || !in.height || in.width > 16384 || in.height > 16384)
-        return "invalid or excessive buffer dimensions";
+    if (!in.width || !in.height || in.width > INT_MAX || in.height > INT_MAX)
+        return "dimensions exceed signed protocol coordinate range";
     *out = in;
     switch (layout) {
     case Layout::SideBySideLeft: case Layout::SideBySideRight:
@@ -16,10 +17,12 @@ const char* output_size(Layout layout, Size in, Size* out) {
         return in.width % 2 ? "packing requires even width" : nullptr;
     case Layout::TopBottomLeft: case Layout::TopBottomRight:
     case Layout::RowsLeft: case Layout::RowsRight:
+        if (in.width > INT_MAX / 2) return "repacked width exceeds signed protocol range";
         out->width *= 2;
         out->height /= 2;
         return in.height % 2 ? "packing requires even height" : nullptr;
     case Layout::TilesLeft: case Layout::TilesRight:
+        if (in.width / 3 > INT_MAX / 4) return "repacked width exceeds signed protocol range";
         out->width = in.width / 3 * 4;
         out->height = in.height / 3 * 2;
         return in.width % 3 || in.height % 3 ? "tile packing requires multiples of three" : nullptr;
@@ -42,11 +45,13 @@ bool repack(Layout layout, Size in, const uint8_t* src, size_t source_size,
     Size out{};
     if (output_size(layout, in, &out) || !src || !dst || !bytes || bytes > 16)
         return false;
+    const size_t limit = std::numeric_limits<size_t>::max();
+    if (in.width > limit / bytes || out.width > limit / bytes) return false;
     const size_t row_bytes = size_t(in.width) * bytes;
-    if (stride < row_bytes || stride > (std::numeric_limits<size_t>::max() - row_bytes) / in.height ||
+    const size_t out_stride = size_t(out.width) * bytes;
+    if (stride < row_bytes || stride > (limit - row_bytes) / in.height ||
         source_size < stride * (in.height - 1) + row_bytes ||
-        size_t(out.width) * out.height > std::numeric_limits<size_t>::max() / bytes ||
-        output_bytes < size_t(out.width) * out.height * bytes)
+        out.height > limit / out_stride || output_bytes < out_stride * out.height)
         return false;
     const uint32_t eye_width = out.width / 2;
     const bool reverse = layout == Layout::SideBySideRight || layout == Layout::TopBottomRight ||

@@ -383,6 +383,7 @@ struct display {
     std::map<uint32_t, struct handleExt> layer_handles_ext;
     kde_stereo_content_manager_v1* stereo_manager = nullptr;
     bool stereo_missing_reported = false;
+    bool stereo_composition_reported = false;
     wl_event_queue* stereo_queue = nullptr;
     std::mutex stereo_mutex;
     std::map<uint64_t, int32_t> stereo_layouts;

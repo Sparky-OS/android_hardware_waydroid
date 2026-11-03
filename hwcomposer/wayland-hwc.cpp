@@ -115,6 +115,19 @@ void snapshot_inactive_app_window(struct display *display, struct window *window
 
     egl_render_to_pixels(display, window->snapshot_buffer.get());
 
+    // The legacy snapshot has no per-layer identity (see the FIXME above).
+    // It must not inherit a live child's stereo mark.
+    bool cleared_stereo = false;
+    for (auto& child : window->layers) {
+        if (child.stereo && child.stereo->declaration) {
+            child.clear_stereo();
+            if (child.surface != surface) wl_surface_commit(child.surface);
+            cleared_stereo = true;
+        }
+    }
+    if (cleared_stereo)
+        ALOGE("WaydroidStereo: inactive legacy snapshot shown in 2D; stereo resumes with live per-layer buffers");
+
     wl_surface_attach(surface, window->snapshot_buffer->wl_buffer, 0, 0);
     wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_commit(surface);

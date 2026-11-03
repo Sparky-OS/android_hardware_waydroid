@@ -2,6 +2,8 @@
 #include "layout.h"
 #include <gtest/gtest.h>
 #include <array>
+#include <climits>
+#include <limits>
 #include <vector>
 using namespace waydroid::stereo;
 namespace {
@@ -62,6 +64,14 @@ TEST(StereoLayout, RefuseUnpairedUnknownAndBadGeometry) {
     EXPECT_NE(output_size(Layout::TopBottomLeft, {4,3}, &out), nullptr);
     EXPECT_NE(output_size(Layout::TilesLeft, {4,3}, &out), nullptr);
     EXPECT_NE(output_size(Layout::SideBySideLeft, {0,2}, &out), nullptr);
+}
+TEST(StereoLayout, CheckedArithmeticWithoutArbitraryRasterLimit) {
+    Size out{};
+    ASSERT_EQ(output_size(Layout::TopBottomLeft, {20000,2}, &out), nullptr);
+    EXPECT_EQ(out.width, 40000u); EXPECT_EQ(out.height, 1u);
+    uint8_t sample = 0;
+    EXPECT_FALSE(repack(Layout::TopBottomLeft, {uint32_t(INT_MAX/2), uint32_t(INT_MAX-1)},
+                        &sample, 1, std::numeric_limits<size_t>::max(), 16, &sample, 1));
 }
 TEST(StereoLayout, SwappedEyeNegativeControlIsDetectable) {
     std::array<uint8_t,8> out{};

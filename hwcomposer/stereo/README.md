@@ -53,3 +53,10 @@ The edition protocol XML is vendored unchanged from libstereo-declare, generated
 Only side_by_side_full is declared, with wp_viewport destination describing one eye's logical size.
 SBS-left buffers retain the existing import path without a stereo copy.
 Modes without per-layer subsurfaces keep the composed framebuffer undeclared and report the missing isolation.
+
+The legacy inactive-window snapshot copies one buffer without per-layer identity.
+It explicitly clears existing stereo marks and logs a 2D snapshot fallback; live per-layer delivery can declare again.
+Preserving stereo across that snapshot requires a per-child snapshot implementation and runtime proof.
+Normal mono frames retain the existing 100 ms acquire-fence warning/commit behavior.
+Stereo reads wait before import/copy and withdraw the child when that fence fails.
+Dimensions are limited by checked protocol/SHM integer ranges and allocation success, not an arbitrary image raster limit.

@@ -49,6 +49,7 @@ cc_library_shared {
         "extension.cpp",
         "gralloc_handler.cpp",
         "stereo/layout.cpp",
+        "stereo/composition.cpp",
         "stereo/surface.cpp",
         "hwcomposer.cpp",
         "wayland-hwc.cpp",
@@ -118,6 +119,7 @@ genrule {
 }
 cc_test_host {
     name: "waydroid_stereo_layout_test",
-    srcs: ["stereo/layout.cpp", "stereo/layout_test.cpp"],
+    srcs: ["stereo/layout.cpp", "stereo/layout_test.cpp",
+           "stereo/composition.cpp", "stereo/composition_test.cpp"],
     cflags: ["-Wall", "-Werror"],
 }

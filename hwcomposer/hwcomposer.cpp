@@ -338,7 +338,7 @@ static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surfac
     });
 }
 
-static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr, buffer **presented = nullptr) {
+static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr, buffer **presented = nullptr, bool stereo_child = false) {
     const int32_t requested_layout = stereo_layout_for(pdev->display, hwc_layer_index);
     const bool stereo_requested = requested_layout != 0 && requested_layout != 1;
     int result = 0;
@@ -377,7 +377,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     }
     hwc_layer->releaseFenceFd = -1;
     auto crop = rect_apply_transform(hwc_layer->sourceCropf, hwc_layer->transform);
-    const bool can_declare = pdev->should_compose &&
+    const bool can_declare = stereo_child &&
             hwc_layer->compositionType != HWC_FRAMEBUFFER_TARGET &&
             !(hwc_layer->flags & HWC_IS_CURSOR_LAYER);
     if (can_declare) prepare_stereo(pdev, hwc_layer, hwc_layer_index, surface_context, buf, crop);
@@ -404,7 +404,7 @@ int apply_hwc_layer_to_window(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 
     buffer *buf = nullptr;
     auto &window_layer = window->get_next_layer();
     if (apply_hwc_layer_to_surface_context(pdev, hwc_layer, hwc_layer_index,
-                                           window_layer, nullptr, &buf) != 0) return -1;
+                                           window_layer, nullptr, &buf, window_layer.subsurface != nullptr) != 0) return -1;
 
     window_layer.set_position(
         floor(hwc_layer->displayFrame.left / pdev->display->scale),
@@ -452,7 +452,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     hwc_display_contents_1_t* contents = displays[HWC_DISPLAY_PRIMARY];
     assert(contents);
 
-    if (pdev->should_compose && contents->flags & HWC_GEOMETRY_CHANGED) {
+    if (contents->flags & HWC_GEOMETRY_CHANGED) {
         pdev->display->buffer_map.clear();
     }
 
@@ -462,8 +462,7 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
     for (size_t i = 0; i < contents->numHwLayers; ++i) {
         const auto& layer = contents->hwLayers[i];
         const int32_t layout = stereo_layout_for(pdev->display, i);
-        if (layout != 0 && layout != 1 && (!pdev->should_compose ||
-            layer.compositionType != HWC_OVERLAY || (layer.flags & HWC_IS_CURSOR_LAYER)))
+        if (layout != 0 && layout != 1 && (layer.compositionType != HWC_OVERLAY || (layer.flags & HWC_IS_CURSOR_LAYER)))
             unavailable_stereo = true;
     }
     {
@@ -878,11 +877,15 @@ void subsurface_cursor_handler::clear_previous_subsurface_if_needed(waydroid_hwc
             return;
         }
 
-        assert(window_it->second->layers.size() == 2);
-        auto &last_layer = window_it->second->layers[window_it->second->layers.size() - 1];
-        last_layer.clear_stereo();
-        wl_surface_attach(last_layer.surface, nullptr, 0, 0);
-        wl_surface_commit(last_layer.surface);
+        // A previous cursor slot may now hold a drawing child or the client
+        // target. Clear only slots that this composition pass did not reuse.
+        auto& window = *window_it->second;
+        for (size_t i = window.lastLayer; i < window.layers.size(); ++i) {
+            auto& child = window.layers[i];
+            child.clear_stereo();
+            wl_surface_attach(child.surface, nullptr, 0, 0);
+            wl_surface_commit(child.surface);
+        }
     }
     window_key = {};
 }

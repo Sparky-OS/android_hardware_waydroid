@@ -64,3 +64,8 @@ Preserving stereo across that snapshot requires a per-child snapshot implementat
 Normal mono frames retain the existing 100 ms acquire-fence warning/commit behavior.
 Stereo reads wait before import/copy and withdraw the child when that fence fails.
 Dimensions are limited by checked protocol/SHM integer ranges and allocation success, not an arbitrary image raster limit.
+
+The default gralloc route repacks the already imported, tightly packed BGRA SHM buffer.
+That importer runs after the acquire fence, and its successful-copy state is reset before every update so a failed mapping cannot reuse old stereo pixels.
+No second native-buffer lock, stride guess or red/blue swap is needed for this route.
+The native GBM/Cros mapping checks remain in place for other buffer transports.

@@ -102,6 +102,9 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
     }
     if (!surface.viewport) return fail("viewporter is required for per-eye geometry");
     const auto& m = buf->metadata;
+    const bool imported_shm = buf->isShm && d->gtype == GrallocType::GRALLOC_DEFAULT;
+    if (imported_shm && !buf->shm_copy_valid)
+        return fail("default gralloc SHM import failed; previous pixels are not stereo content");
     Size out{};
     if (const char* reason = waydroid::stereo::output_size(layout, {m.width, m.height}, &out))
         return fail(reason);
@@ -116,35 +119,46 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
         auto* slot = acquire_buffer(d, state, out);
         if (!slot) return fail("no released copy buffer or SHM allocation failed");
         void* source = nullptr;
-        int32_t bytes_per_pixel = 0, bytes_per_stride = 0;
+        size_t source_size = 0, source_stride = 0;
         auto& mapper = android::GraphicBufferMapper::get();
-        if (mapper.lock(layer->handle, GRALLOC_USAGE_SW_READ_OFTEN,
+        if (imported_shm) {
+            // The existing importer has already produced tightly packed BGRA.
+            // Gralloc2 does not supply CPU strides; do not lock or swizzle twice.
+            source = buf->shm_data;
+            source_size = buf->size;
+            source_stride = size_t(m.width) * 4;
+        } else {
+            int32_t bytes_per_pixel = 0, bytes_per_stride = 0;
+            if (mapper.lock(layer->handle, GRALLOC_USAGE_SW_READ_OFTEN,
                         android::Rect(m.width, m.height), &source,
                         &bytes_per_pixel, &bytes_per_stride))
-            return fail("source buffer cannot be CPU-read (protected or unmappable)");
-        // Older grallocs report -1 for these fields; use only native handle
-        // metadata in that case, never the legacy Z-indexed generic fallback.
-        if (bytes_per_pixel < 0 || bytes_per_stride < 0) {
-            if (d->gtype != GrallocType::GRALLOC_GBM && d->gtype != GrallocType::GRALLOC_CROS) {
-                mapper.unlock(layer->handle);
-                return fail("gralloc cannot verify CPU pixel stride");
+                return fail("source buffer cannot be CPU-read (protected or unmappable)");
+            // Use verified native handle metadata only for these known grallocs.
+            if (bytes_per_pixel < 0 || bytes_per_stride < 0) {
+                if (d->gtype != GrallocType::GRALLOC_GBM && d->gtype != GrallocType::GRALLOC_CROS) {
+                    mapper.unlock(layer->handle);
+                    return fail("gralloc cannot verify CPU pixel stride");
+                }
+                bytes_per_pixel = 4;
+                bytes_per_stride = m.pixel_stride <= INT_MAX / 4 ? m.pixel_stride * 4 : 0;
             }
-            bytes_per_pixel = 4;
-            bytes_per_stride = m.pixel_stride <= INT_MAX / 4 ? m.pixel_stride * 4 : 0;
-        }
-        if (bytes_per_pixel != 4 || bytes_per_stride < int64_t(m.width) * 4) {
-            mapper.unlock(layer->handle);
-            return fail("gralloc mapping has unexpected pixel or row stride");
+            if (bytes_per_pixel != 4 || bytes_per_stride < int64_t(m.width) * 4) {
+                mapper.unlock(layer->handle);
+                return fail("gralloc mapping has unexpected pixel or row stride");
+            }
+            source_stride = bytes_per_stride;
+            source_size = source_stride * m.height;
         }
         auto* pixels = static_cast<uint8_t*>(slot->image->shm_data);
         bool ok = waydroid::stereo::repack(layout, {m.width, m.height},
-                static_cast<uint8_t*>(source), size_t(bytes_per_stride) * m.height,
-                size_t(bytes_per_stride), 4, pixels, slot->image->size);
-        mapper.unlock(layer->handle);
+                static_cast<uint8_t*>(source), source_size, source_stride,
+                4, pixels, slot->image->size);
+        if (!imported_shm) mapper.unlock(layer->handle);
         if (!ok) return fail("source bounds or packing rejected");
         // Wayland's mandatory ARGB8888 is BGRA byte order on Android x86.
         for (size_t i = 0; i < size_t(out.width) * out.height; ++i) {
-            if (m.format != HAL_PIXEL_FORMAT_BGRA_8888) std::swap(pixels[i*4], pixels[i*4+2]);
+            if (!imported_shm && m.format != HAL_PIXEL_FORMAT_BGRA_8888)
+                std::swap(pixels[i*4], pixels[i*4+2]);
             if (m.format == HAL_PIXEL_FORMAT_RGBX_8888) pixels[i*4+3] = 255;
         }
         buf = slot->image.get();

@@ -129,6 +129,7 @@ struct buffer {
     buffer_metadata metadata;
 
     bool isShm;
+    bool shm_copy_valid = false;
     void *shm_data;
     int size;
 

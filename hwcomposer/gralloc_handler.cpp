@@ -277,10 +277,23 @@ void update_shm_buffer_generic(display *display, buffer *buffer) {
     sem_wait(&display->egl_done);
 }
 void update_shm_buffer_default(display *, buffer *buffer) {
+    // A failed update must not make an earlier frame usable for stereo.
+    buffer->shm_copy_valid = false;
     void *data;
     uint32_t shm_stride, src_stride;
+    const auto& m = buffer->metadata;
+    if (!m.width || !m.height || m.pixel_stride < m.width || buffer->size <= 0 ||
+        m.width > size_t(buffer->size) / 4 / m.height) {
+        ALOGE("Cannot copy default gralloc buffer: invalid SHM geometry");
+        return;
+    }
     android::Rect bounds(buffer->metadata.width, buffer->metadata.height);
     if (android::GraphicBufferMapper::get().lock(buffer->handle, GRALLOC_USAGE_SW_READ_OFTEN, bounds, &data) == 0) {
+        if (!data) {
+            android::GraphicBufferMapper::get().unlock(buffer->handle);
+            ALOGE("Cannot copy default gralloc buffer: null CPU mapping");
+            return;
+        }
         src_stride = buffer->metadata.pixel_stride;
         shm_stride = buffer->metadata.width;
         for (int i = 0; i < buffer->metadata.height; i++) {
@@ -295,7 +308,8 @@ void update_shm_buffer_default(display *, buffer *buffer) {
                 dist++;
             }
         }
-        android::GraphicBufferMapper::get().unlock(buffer->handle);
+        buffer->shm_copy_valid = android::GraphicBufferMapper::get().unlock(buffer->handle) == 0 &&
+                (m.format == HAL_PIXEL_FORMAT_RGBA_8888 || m.format == HAL_PIXEL_FORMAT_RGBX_8888);
     }
 }
 }

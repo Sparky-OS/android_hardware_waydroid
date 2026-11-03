@@ -388,7 +388,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
     // A repack changes damage coordinates; full damage is safe for both paths.
     if (surface_context.stereo) surface_context.damage_surface(0, 0, INT32_MAX, INT32_MAX);
     else apply_surface_damage(hwc_layer, surface_context);
-    surface_context.set_buffer_transform(stereo_prepared ? WL_OUTPUT_TRANSFORM_NORMAL :
+    surface_context.set_buffer_transform(stereo_prepared ? hwc_transform_to_buffer_transform(0) :
                                          hwc_transform_to_buffer_transform(hwc_layer->transform));
     if (surface_context.viewport) {
         surface_context.set_crop(crop);

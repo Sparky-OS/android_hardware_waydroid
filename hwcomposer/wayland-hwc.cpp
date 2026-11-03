@@ -559,9 +559,17 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
     window->set_app_id(std::move(appID));
 
     wl_surface_commit(window->surface);
+    // The event thread owns the default queue. Keep our sync callbacks private
+    // so it cannot consume done between our roundtrip test and blocking dispatch.
+    // Configure events continue to set the atomic flag on the event thread.
     // Wait for first configure event
     do {
-        wl_display_roundtrip(display->display);
+        if (wl_display_roundtrip_queue(display->display, display->stereo_queue) < 0) {
+            ALOGE("Window initialization failed: Wayland roundtrip disconnected");
+            wl_shm_pool_destroy(pool);
+            munmap(shm_data, 4);
+            return nullptr;
+        }
     } while (!window->configured);
 
     if (calibrating) {
@@ -582,7 +590,12 @@ window::create(struct display *display, bool use_subsurfaces, std::string appID,
         if (window->viewport && display->req_width && display->req_height)
             wp_viewport_set_destination(window->viewport, display->req_width, display->req_height);
         wl_surface_commit(window->surface);
-        wl_display_roundtrip(display->display);
+        if (wl_display_roundtrip_queue(display->display, display->stereo_queue) < 0) {
+            ALOGE("Window initialization failed: Wayland roundtrip disconnected");
+            wl_shm_pool_destroy(pool);
+            munmap(shm_data, 4);
+            return nullptr;
+        }
 
         if (fs) {
             wp_fractional_scale_v1_destroy(fs);

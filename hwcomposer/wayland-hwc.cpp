@@ -1934,7 +1934,7 @@ registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "kde_stereo_content_manager_v1") == 0) {
         d->stereo_manager = static_cast<kde_stereo_content_manager_v1*>(
             wl_registry_bind(registry, id, &kde_stereo_content_manager_v1_interface,
-                             std::min(version, 2U)));
+                             std::min(version, 4U)));
     } else if (strcmp(interface, "wl_subcompositor") == 0) {
         d->subcompositor =
         (struct wl_subcompositor*)wl_registry_bind(registry,

@@ -6,7 +6,7 @@
     SPDX-License-Identifier: MIT-CMU
     ]]></copyright>
 
-<interface name="kde_stereo_content_manager_v1" version="3">
+<interface name="kde_stereo_content_manager_v1" version="4">
   <description summary="declare stereo content of surfaces">
     A program tells the compositor that a surface's picture holds two
     views, one per eye, packed full side by side, with the left eye first.
@@ -52,7 +52,7 @@
   </request>
 </interface>
 
-<interface name="kde_stereo_content_v1" version="3">
+<interface name="kde_stereo_content_v1" version="4">
   <description summary="stereo content declaration of one surface">
     The declaration of one surface, created with
     kde_stereo_content_manager_v1.create.
@@ -67,10 +67,12 @@
     buffer onto one eye's size itself, for example with a viewport.
 
     Version 3 changes nothing in this interface.
+    Version 4 adds a double-buffered native source rectangle for each eye.
   </description>
 
   <enum name="error">
     <entry name="no_surface" value="0" summary="the surface no longer exists"/>
+    <entry name="bad_source" value="1" since="4" summary="invalid per-eye source rectangle"/>
   </enum>
 
   <request name="destroy" type="destructor">
@@ -97,9 +99,33 @@
     <arg name="content" type="uint" enum="content" summary="packing and eye order"/>
   </request>
 
+  <request name="set_eye_source" since="4">
+    <description summary="select the same native source rectangle in both eyes">
+      Select a rectangle independently within each eye of side_by_side_full
+      content. Coordinates are native buffer pixels after the buffer transform,
+      relative to the top left of each half of the viewport source rectangle.
+      The viewport destination remains the logical size of one drawing area.
+      No new packing or eye-order value is introduced.
+
+      The rectangle is double buffered with wl_surface.commit. Initially it is
+      unset. Set all four values to -1 to unset it. Otherwise x and y must be
+      nonnegative and width and height strictly positive. The rectangle must
+      fit inside each eye when a buffer is committed; otherwise bad_source is
+      raised. With no viewport destination, the rectangle's size divided by
+      buffer scale gives the surface size. Fractional edges are retained.
+
+      Setting content to none or destroying the declaration also unsets the
+      rectangle. This request on a destroyed wl_surface raises no_surface.
+      Existing clients which do not set an eye source keep their behavior.
+    </description>
+    <arg name="x" type="fixed"/>
+    <arg name="y" type="fixed"/>
+    <arg name="width" type="fixed"/>
+    <arg name="height" type="fixed"/>
+  </request>
 </interface>
 
-<interface name="kde_stereo_depth_v1" version="3">
+<interface name="kde_stereo_depth_v1" version="4">
   <description summary="desktop depth of one surface">
     The compositor shows the desktop's own surfaces at depth levels: the
     active window at the screen, the windows lying behind it sunk, menus,

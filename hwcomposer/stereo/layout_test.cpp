@@ -129,3 +129,23 @@ TEST(StereoGeometry, Clip399KeepsOneHundredNativeColumns) {
     EXPECT_NE(cropped_size(Layout::TopBottomLeft, {192,216}, {0,0,100,108}, 8, &out), nullptr);
     EXPECT_NE(cropped_size(Layout::TopBottomLeft, {192,216}, {0,0,0,108}, 0, &out), nullptr);
 }
+
+TEST(StereoGeometry, FractionalEdgesFollowTheNativeEyeTransform) {
+    // A 3x2 eye with an asymmetric subpixel box; expected corner positions
+    // come from reflecting/rotating its four corners, not from raster copies.
+    const EyeSource expected[] = {
+        {.25,.5,1.5,1.25}, {1.25,.5,1.5,1.25}, {.25,.25,1.5,1.25}, {1.25,.25,1.5,1.25},
+        {.25,.25,1.25,1.5}, {.25,1.25,1.25,1.5}, {.5,.25,1.25,1.5}, {.5,1.25,1.25,1.5}};
+    for (uint32_t transform = 0; transform < 8; ++transform) {
+        SCOPED_TRACE(transform);
+        EyeSource out{};
+        ASSERT_TRUE(transform_eye_source({.25,.5,1.5,1.25}, {3,2}, transform, &out));
+        EXPECT_DOUBLE_EQ(out.left, expected[transform].left);
+        EXPECT_DOUBLE_EQ(out.top, expected[transform].top);
+        EXPECT_DOUBLE_EQ(out.width, expected[transform].width);
+        EXPECT_DOUBLE_EQ(out.height, expected[transform].height);
+    }
+    EyeSource out{};
+    EXPECT_FALSE(transform_eye_source({.25,.5,3,1.25}, {3,2}, 0, &out));
+    EXPECT_FALSE(transform_eye_source({.25,.5,1.5,1.25}, {3,2}, 8, &out));
+}

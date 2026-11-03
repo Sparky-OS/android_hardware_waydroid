@@ -3,6 +3,7 @@
 #include <cstring>
 #include <climits>
 #include <limits>
+#include <cmath>
 
 namespace waydroid::stereo {
 const char* output_size(Layout layout, Size in, Size* out) {
@@ -43,6 +44,20 @@ const char* output_size(Layout layout, Size in, Size* out) {
     default:
         return "unknown stereo layout";
     }
+}
+
+bool transform_eye_source(EyeSource source, Size eye, uint32_t transform, EyeSource* output) {
+    if (transform & ~7u || !std::isfinite(source.left) || !std::isfinite(source.top) ||
+        !std::isfinite(source.width) || !std::isfinite(source.height) || source.left < 0 ||
+        source.top < 0 || source.width <= 0 || source.height <= 0 ||
+        source.left + source.width > eye.width || source.top + source.height > eye.height)
+        return false;
+    if (transform & 1) source.left = eye.width - source.left - source.width;
+    if (transform & 2) source.top = eye.height - source.top - source.height;
+    *output = transform & 4
+        ? EyeSource{eye.height - source.top - source.height, source.left, source.height, source.width}
+        : source;
+    return true;
 }
 
 const char* cropped_size(Layout layout, Size in, EyeCrop crop, uint32_t transform, Size* out) {

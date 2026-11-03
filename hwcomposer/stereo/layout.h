@@ -25,6 +25,9 @@ struct Size { uint32_t width, height; };
 const char* output_size(Layout layout, Size input, Size* output);
 // Native per-eye source rectangle, before flips and clockwise rotation.
 struct EyeCrop { uint32_t left, top, width, height; };
+// Geometry only: fractional edges are sampled once by the compositor.
+struct EyeSource { double left, top, width, height; };
+bool transform_eye_source(EyeSource source, Size eye, uint32_t transform, EyeSource* output);
 const char* cropped_size(Layout layout, Size input, EyeCrop crop, uint32_t transform, Size* output);
 bool repack_crop(Layout layout, Size input, EyeCrop crop, uint32_t transform,
                  const uint8_t* source, size_t source_size, size_t stride,

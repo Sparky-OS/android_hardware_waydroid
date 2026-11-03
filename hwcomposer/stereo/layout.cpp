@@ -46,27 +46,27 @@ const char* output_size(Layout layout, Size in, Size* out) {
     }
 }
 
-bool transform_eye_source(EyeSource source, Size eye, uint32_t transform, EyeSource* output) {
+bool transform_view_source(ViewSource source, Size view, uint32_t transform, ViewSource* output) {
     if (transform & ~7u || !std::isfinite(source.left) || !std::isfinite(source.top) ||
         !std::isfinite(source.width) || !std::isfinite(source.height) || source.left < 0 ||
         source.top < 0 || source.width <= 0 || source.height <= 0 ||
-        source.left + source.width > eye.width || source.top + source.height > eye.height)
+        source.left + source.width > view.width || source.top + source.height > view.height)
         return false;
-    if (transform & 1) source.left = eye.width - source.left - source.width;
-    if (transform & 2) source.top = eye.height - source.top - source.height;
+    if (transform & 1) source.left = view.width - source.left - source.width;
+    if (transform & 2) source.top = view.height - source.top - source.height;
     *output = transform & 4
-        ? EyeSource{eye.height - source.top - source.height, source.left, source.height, source.width}
+        ? ViewSource{view.height - source.top - source.height, source.left, source.height, source.width}
         : source;
     return true;
 }
 
-const char* cropped_size(Layout layout, Size in, EyeCrop crop, uint32_t transform, Size* out) {
+const char* cropped_size(Layout layout, Size in, ViewCrop crop, uint32_t transform, Size* out) {
     Size full{};
     if (const char* reason = output_size(layout, in, &full)) return reason;
     if (transform & ~7u) return "unknown transform bits";
     if (!crop.width || !crop.height || crop.left >= full.width / 2 ||
         crop.top >= full.height || crop.width > full.width / 2 - crop.left ||
-        crop.height > full.height - crop.top) return "per-eye crop outside native samples";
+        crop.height > full.height - crop.top) return "per-view crop outside native samples";
     const uint32_t width = transform & 4 ? crop.height : crop.width;
     const uint32_t height = transform & 4 ? crop.width : crop.height;
     if (width > INT_MAX / 2) return "transformed width exceeds signed protocol range";
@@ -82,7 +82,7 @@ bool repack(Layout layout, Size in, const uint8_t* src, size_t source_size,
                        src, source_size, stride, bytes, dst, output_bytes);
 }
 
-bool repack_crop(Layout layout, Size in, EyeCrop crop, uint32_t transform,
+bool repack_crop(Layout layout, Size in, ViewCrop crop, uint32_t transform,
                  const uint8_t* src, size_t source_size, size_t stride,
                  size_t bytes, uint8_t* dst, size_t output_bytes) {
     Size out{}, full{};
@@ -104,7 +104,7 @@ bool repack_crop(Layout layout, Size in, EyeCrop crop, uint32_t transform,
     for (uint32_t y = 0; y < out.height; ++y) {
         for (uint32_t x = 0; x < out.width; ++x) {
             const uint32_t eye = (x / eye_width) ^ reverse;
-            // Invert the transform within each eye; never rotate the packed pair.
+            // Invert the transform within each view; never rotate the packed pair.
             uint32_t ex = x % eye_width, ey = y;
             if (transform & 4) { ex = y; ey = crop.height - 1 - x % eye_width; }
             if (transform & 1) ex = crop.width - 1 - ex;

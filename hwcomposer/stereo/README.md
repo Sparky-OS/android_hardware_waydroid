@@ -39,7 +39,7 @@ SBS quincunx retains its sampled rows unchanged.
 Temporal and separate-view inputs cannot be reconstructed from one buffer and an integer.
 They produce a `WaydroidStereo` error naming the layout and requiring the producer to hand one side-by-side buffer, left first.
 The producer copies both views at their own resolution into that buffer and marks it SBS left-first.
-SurfaceFlinger and HWC do not pair layers or temporal arrivals; one buffer keeps both eyes in the same presentation.
+SurfaceFlinger and HWC do not pair layers or temporal arrivals; one buffer keeps both views in the same presentation.
 Media decoding and its own packing belong to the later MediaFormat/Codec2 work.
 Anaglyph cannot reconstruct two original full-colour images by sample copying and is also explicitly rejected.
 Unknown or unspecified layouts, unreadable buffers, unsupported CPU formats and cropped/transformed packed input are diagnosed rather than falsely declared.

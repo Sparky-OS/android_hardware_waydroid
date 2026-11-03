@@ -140,7 +140,7 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
         }
         return false;
     }
-    if (!surface.viewport) return fail("viewporter is required for per-eye geometry");
+    if (!surface.viewport) return fail("viewporter is required for per-view geometry");
     const auto& m = buf->metadata;
     const bool imported_shm = buf->isShm && d->gtype == GrallocType::GRALLOC_DEFAULT;
     if (imported_shm && !buf->shm_copy_valid)
@@ -158,25 +158,25 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
     if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
         !std::isfinite(bottom) || left < 0 || top < 0 || right > out.width / 2 ||
         bottom > out.height || right <= left || bottom <= top)
-        return fail("per-eye crop outside native samples");
+        return fail("per-view crop outside native samples");
     const bool fractional = left != std::floor(left) || top != std::floor(top) ||
                             right != std::floor(right) || bottom != std::floor(bottom);
     const bool source_supported = kde_stereo_content_manager_v1_get_version(d->stereo_manager) >= 4;
     if (fractional && !source_supported)
-        return fail("fractional per-eye edges need stereo protocol version 4; samples are not rescaled");
-    waydroid::stereo::EyeSource eye_source{};
-    if (!waydroid::stereo::transform_eye_source({left, top, right-left, bottom-top},
-                                               {out.width / 2, out.height}, layer->transform, &eye_source))
-        return fail("invalid per-eye transform geometry");
+        return fail("fractional per-view edges need stereo protocol version 4; samples are not rescaled");
+    waydroid::stereo::ViewSource view_source{};
+    if (!waydroid::stereo::transform_view_source({left, top, right-left, bottom-top},
+                                               {out.width / 2, out.height}, layer->transform, &view_source))
+        return fail("invalid per-view transform geometry");
     // Keep the full native lattice for fractional crops. KWin selects the
-    // fractional rectangle within each eye after the byte-preserving copy.
-    const waydroid::stereo::EyeCrop eye_crop = fractional
-        ? waydroid::stereo::EyeCrop{0, 0, out.width / 2, out.height}
-        : waydroid::stereo::EyeCrop{uint32_t(left), uint32_t(top), uint32_t(right-left), uint32_t(bottom-top)};
+    // fractional rectangle within each view after the byte-preserving copy.
+    const waydroid::stereo::ViewCrop view_crop = fractional
+        ? waydroid::stereo::ViewCrop{0, 0, out.width / 2, out.height}
+        : waydroid::stereo::ViewCrop{uint32_t(left), uint32_t(top), uint32_t(right-left), uint32_t(bottom-top)};
     const bool full_crop = fractional ||
         (left == 0 && top == 0 && right == out.width / 2 && bottom == out.height);
     if (const char* reason = waydroid::stereo::cropped_size(layout, {m.width, m.height},
-                                                         eye_crop, layer->transform, &out))
+                                                         view_crop, layer->transform, &out))
         return fail(reason);
     if (layer->transform || !full_crop ||
         (layout != Layout::SideBySideLeft && layout != Layout::SideBySideQuincunxLeft)) {
@@ -218,7 +218,7 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
             source_size = source_stride * m.height;
         }
         auto* pixels = static_cast<uint8_t*>(slot->image->shm_data);
-        bool ok = waydroid::stereo::repack_crop(layout, {m.width, m.height}, eye_crop, layer->transform,
+        bool ok = waydroid::stereo::repack_crop(layout, {m.width, m.height}, view_crop, layer->transform,
                 static_cast<uint8_t*>(source), source_size, source_stride,
                 4, pixels, slot->image->size);
         if (!imported_shm) mapper.unlock(layer->handle);
@@ -248,13 +248,13 @@ bool prepare_stereo(waydroid_hwc_composer_device_1* pdev, hwc_layer_1_t* layer,
     kde_stereo_content_v1_set_content(state.declaration, KDE_STEREO_CONTENT_V1_CONTENT_SIDE_BY_SIDE_FULL);
     if (source_supported) {
         if (fractional) {
-            kde_stereo_content_v1_set_eye_source(state.declaration,
-                wl_fixed_from_double(eye_source.left), wl_fixed_from_double(eye_source.top),
-                wl_fixed_from_double(eye_source.width), wl_fixed_from_double(eye_source.height));
+            kde_stereo_content_v1_set_view_source(state.declaration,
+                wl_fixed_from_double(view_source.left), wl_fixed_from_double(view_source.top),
+                wl_fixed_from_double(view_source.width), wl_fixed_from_double(view_source.height));
             // A zero-copy SBS import still arrives with the packed crop.
             crop = {0, 0, float(out.width), float(out.height)};
         } else {
-            kde_stereo_content_v1_set_eye_source(state.declaration,
+            kde_stereo_content_v1_set_view_source(state.declaration,
                 wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(-1));
         }
     }

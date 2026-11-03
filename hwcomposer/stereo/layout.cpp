@@ -26,9 +26,14 @@ const char* output_size(Layout layout, Size in, Size* out) {
         out->width = in.width / 3 * 4;
         out->height = in.height / 3 * 2;
         return in.width % 3 || in.height % 3 ? "tile packing requires multiples of three" : nullptr;
-    case Layout::TemporalLeft: case Layout::TemporalRight:
-    case Layout::SeparateLeft: case Layout::SeparateRight:
-        return "paired views require pair and frame identities; one buffer is insufficient";
+    case Layout::TemporalLeft:
+        return "temporal left-first: producer must hand one side-by-side buffer, left first";
+    case Layout::TemporalRight:
+        return "temporal right-first: producer must hand one side-by-side buffer, left first";
+    case Layout::SeparateLeft:
+        return "separate views left-first: producer must hand one side-by-side buffer, left first";
+    case Layout::SeparateRight:
+        return "separate views right-first: producer must hand one side-by-side buffer, left first";
     case Layout::AnaglyphCyanRed: case Layout::AnaglyphGreenMagenta:
         return "anaglyph does not contain two recoverable full-colour views";
     case Layout::UnspecifiedViews:

@@ -26,7 +26,8 @@ Metadata changes must accompany the corresponding buffer transaction.
 These values are private semantic identifiers, not copied container wire numbers.
 Packing vocabulary follows AVC Annex D.2.26 and Matroska RFC 9559 StereoMode; AVC interpretation 0 remains unspecified.
 AVC types 0/1/2/3/4/5/6/7 correspond to checkerboard/columns/rows/SBS/TB/temporal/mono/tiles.
-RFC 9559 values 13/14 describe laced separate views and map to 16/17 here only after a producer supplies the actual views.
+RFC 9559 values 13/14 describe laced separate views; private values 16/17 preserve that vocabulary for diagnostics.
+The producer assembles the decoded views into one left-first SBS buffer and uses value 2 for delivery.
 Future extraction work must retain field-view, grid-position and flipping information, not infer these attributes from packing alone.
 
 The current spatial copy implementation preserves samples and does no upconversion.
@@ -36,7 +37,10 @@ Checkerboard rows are compacted without reconstructing absent samples.
 SBS quincunx retains its sampled rows unchanged.
 
 Temporal and separate-view inputs cannot be reconstructed from one buffer and an integer.
-They currently produce a clear `WaydroidStereo` error and remain undeclared while pair/frame identity semantics are being settled.
+They produce a `WaydroidStereo` error naming the layout and requiring the producer to hand one side-by-side buffer, left first.
+The producer copies both views at their own resolution into that buffer and marks it SBS left-first.
+SurfaceFlinger and HWC do not pair layers or temporal arrivals; one buffer keeps both eyes in the same presentation.
+Media decoding and its own packing belong to the later MediaFormat/Codec2 work.
 Anaglyph cannot reconstruct two original full-colour images by sample copying and is also explicitly rejected.
 Unknown or unspecified layouts, unreadable buffers, unsupported CPU formats and cropped/transformed packed input are diagnosed rather than falsely declared.
 This restriction is visible and is not a claim of completed format support.
